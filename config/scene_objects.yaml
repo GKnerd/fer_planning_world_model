@@ -1,0 +1,43 @@
+# Static collision objects pushed to MoveIt's planning scene at startup.
+#
+# Each entry maps onto a moveit_msgs/msg/CollisionObject with operation = ADD.
+# Primitive types:
+#   box      → dimensions: [x, y, z]
+#   cylinder → dimensions: [height, radius]
+#   sphere   → dimensions: [radius]
+#   cone     → dimensions: [height, radius]
+#
+# Pose is in the object's `frame_id` (must be a frame ROS knows via /tf).
+
+objects:
+  - id: cylinder_1
+    frame_id: world
+    primitive:
+      type: cylinder
+      dimensions: [0.10, 0.02]   # height, radius
+    pose:
+      position:
+        x: 0.5
+        y: -0.25
+        z: 0.05
+      orientation:
+        x: 0.0
+        y: 0.0
+        z: 0.0
+        w: 1.0
+
+  - id: box_1
+    frame_id: world
+    primitive:
+      type: box
+      dimensions: [0.05, 0.05, 0.05]   # x, y, z
+    pose:
+      position:
+        x: 0.4
+        y: 0.10
+        z: 0.025
+      orientation:
+        x: 0.0
+        y: 0.0
+        z: 0.0
+        w: 1.0
