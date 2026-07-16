@@ -4,35 +4,37 @@ Kept separate from both the pure model (which stays ROS-free) and the node
 (which owns the ROS graph). Nothing here touches a clock or a topic — it only
 converts data, so it is still straightforward to test.
 
-Design note: we only ever emit **diffs** (PlanningScene.is_diff = True) with
-explicit ADD/REMOVE ops. We never send a full (is_diff = False) scene, because
-that would wipe the pre-registered static environment (table, fixtures) that the
-world model does NOT own.
+Direction of travel: the world model is a READ-ONLY observer of the planning
+scene, so the main road here is ROS -> pure-model (scene messages reduced to
+PlanningSceneObjects the model can fold in). The one pure-model -> ROS export
+that remains is to_collision_object, used to publish the model's own view on
+~/world_state — a plain introspection topic, never a scene write.
 
 Ownership of attachment:
-    - Only MTC attaches an object to the gripper aka it modifies the planning scene. It does so as 
-    part of executing a pick, together with the ACM entries (allowCollisions) that let the fingers
-    touch the object without it counting as a collision. 
-    - The world model only reads attachment. It adopts the scene's view into ObjectStatus.GRASPED and 
-    the single write it may perform is a detach (see detach_diff), which removes ACM entries rather 
-    than creating them. 
-    - The model can never re-create an attachment.
+    - Only MTC writes attachment (and the ACM entries that let the fingers
+      touch the object). Perception writes world objects. The world model
+      writes NOTHING to the scene — it observes attach/detach diffs and tracks
+      FREE/GRASPED accordingly.
+    - Repairing a phantom grasp (scene says attached, gripper provably empty)
+      therefore belongs to a dedicated repair skill dispatched by the
+      orchestrator: detach the ghost (which removes ACM entries, so no
+      touch_links needed) and re-add the object at the model's remembered
+      pose. That skill, not this package, owns that write.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Iterable
-
 from geometry_msgs.msg import Point as RosPoint
 from geometry_msgs.msg import Pose as RosPose
 from geometry_msgs.msg import Quaternion as RosQuaternion
-from moveit_msgs.msg import AttachedCollisionObject, CollisionObject, PlanningScene
+from moveit_msgs.msg import CollisionObject
 from shape_msgs.msg import SolidPrimitive
 
 from fer_world_model.core.planning_scene_object import (
     ObjectStatus,
+    Point,
     Pose,
+    Quaternion,
     PlanningSceneObject,
     Box,
     Cylinder,
@@ -40,21 +42,6 @@ from fer_world_model.core.planning_scene_object import (
     Cone,
     Mesh
 )
-
-
-@dataclass(frozen=True)
-class SceneFacts:
-    """Reduced, ROS-free snapshot of the only parts of the planning scene the
-    world model reconciles against: which collision objects exist in the world,
-    and which are attached to the robot (object id -> link it hangs off).
-
-    Everything else the scene carries (static environment geometry, octomap,
-    ACM, transforms) is deliberately dropped. This is the incoming mirror of the
-    outgoing diff: the node compares this against the model, but never has to
-    grub through raw messages to do it.
-    """
-    world_ids: frozenset[str]
-    attached: dict[str, str]   # object id -> link_name
 
 
 class PlanningSceneAdapter:
@@ -70,7 +57,6 @@ class PlanningSceneAdapter:
                 x=pose.orientation.x, y=pose.orientation.y,
                 z=pose.orientation.z, w=pose.orientation.w),
         )
-    
 
     def to_moveit_shape(self, shape: Box | Sphere | Cylinder | Cone | Mesh) -> SolidPrimitive:
         match shape:
@@ -81,33 +67,44 @@ class PlanningSceneAdapter:
             case Cylinder(h, r):
                 return SolidPrimitive(type=SolidPrimitive.CYLINDER, dimensions=[h, r])
             case Cone(h, r):
-                return SolidPrimitive(type=SolidPrimitive.CONE, dimensions=[h, r])    
+                return SolidPrimitive(type=SolidPrimitive.CONE, dimensions=[h, r])
             case Mesh():
                 raise NotImplementedError("Meshes are not currently supported. WIP.")
             case _:
                 raise ValueError(f"Unsupported Shape for: {type(shape).__name__}")
 
+    def to_collision_object(
+            self,
+            obj: PlanningSceneObject,
+            operation: int = CollisionObject.ADD
+    ) -> CollisionObject:
+
+        co = CollisionObject()
+        co.header.frame_id = obj.frame
+        co.id = obj.id
+        co.operation = operation
+
+        if operation != CollisionObject.REMOVE:
+            co.pose = self.to_ros_pose(obj.pose)          # object origin in obj.frame
+            co.primitives = [self.to_moveit_shape(shape=obj.shape)]
+            co.primitive_poses = [RosPose()]              # primitive at object origin
+
+        return co
 
     # -- ROS -> pure-model ----------------------------------------------------
-    def scene_facts(self, scene: PlanningScene) -> SceneFacts:
-        """Reduce a PlanningScene message to the facts the model reconciles
-        against. Pure data..
-
-        Note attachment lives in robot_state.attached_collision_objects, each a
-        wrapper carrying the link it is attached to plus the CollisionObject
-        itself; the object's id is nested one level down (aco.object.id).
-        """
-        world_ids = frozenset(co.id for co in scene.world.collision_objects)
-        attached = {
-            aco.object.id: aco.link_name
-            for aco in scene.robot_state.attached_collision_objects
-        }
-        return SceneFacts(world_ids=world_ids, attached=attached)
+    @staticmethod
+    def from_ros_pose(pose: RosPose) -> Pose:
+        return Pose(
+            position=Point(x=pose.position.x, y=pose.position.y, z=pose.position.z),
+            orientation=Quaternion(
+                x=pose.orientation.x, y=pose.orientation.y,
+                z=pose.orientation.z, w=pose.orientation.w),
+        )
 
     def from_moveit_to_primitive(self, primitive: SolidPrimitive) -> Box | Sphere | Cylinder | Cone:
         """SolidPrimitive -> core shape.
 
-        This is the boundary: incoming messages are untrusted, so they are checked here. 
+        This is the boundary: incoming messages are untrusted, so they are checked here.
         Once it is a Box/Cylinder/... it is correct by
         construction and the core never has to re-validate.
         """
@@ -139,85 +136,33 @@ class PlanningSceneAdapter:
             case _:
                 raise ValueError(f"unsupported SolidPrimitive type: {primitive.type}")
 
-    # -- pure-model -> ROS ----------------------------------------------------
-    def to_collision_object(
-            self,
-            obj: PlanningSceneObject,
-            operation: int = CollisionObject.ADD
-    ) -> CollisionObject:
-        
-        co = CollisionObject()
-        co.header.frame_id = obj.frame
-        co.id = obj.id
-        co.operation = operation
-        
-        if operation != CollisionObject.REMOVE:
-            co.pose = self.to_ros_pose(obj.pose)          # object origin in obj.frame
-            co.primitives = [self.to_moveit_shape(shape=obj.shape)]
-            co.primitive_poses = [RosPose()]              # primitive at object origin
-
-        return co
-
-    @staticmethod
-    def remove_object(object_id: str) -> CollisionObject:
-        co = CollisionObject()
-        co.id = object_id
-        co.operation = CollisionObject.REMOVE
-        return co
-
-    # -- scene diffs ----------------------------------------------------------
-    def build_diff(
+    def to_scene_object(
         self,
-        add_objects: Iterable[PlanningSceneObject] = (),
-        remove_ids: Iterable[str] = (),
-    ) -> PlanningScene:
-        """One atomic diff: FREE objects are asserted as world collision objects,
-        remove_ids are deleted from the world.
+        co: CollisionObject,
+        stamp: float,
+        status: ObjectStatus = ObjectStatus.FREE,
+        held_by: str | None = None,
+    ) -> PlanningSceneObject:
+        """CollisionObject -> PlanningSceneObject, for folding observed scene
+        content into the model.
 
-        GRASPED objects are deliberately SKIPPED. MTC attaches/detaches as part of
-        executing a pick/place and owns both the attachment and its ACM entries
-        (allowCollisions), so re-asserting a grasped object here would fight it:
-        we would re-add the object to the *world* at its stale pose while MTC holds
-        it attached to the hand. The model still tracks GRASPED — it just does not
-        project it. See detach_diff() for the one case we do write attachment.
+        Raises ValueError on messages the model cannot represent (no/multiple
+        primitives, bad dimensions) — the caller decides whether to skip or
+        complain. MOVE diffs never come through here (they carry no geometry);
+        see PlanningSceneWorldModel.observe_moved.
         """
-        scene = PlanningScene()
-        scene.is_diff = True
-        # Even though we no longer touch robot_state, this must stay True: an
-        # empty robot_state with is_diff=False reads as a full, empty robot state
-        # rather than "no change".
-        scene.robot_state.is_diff = True
-
-        for obj in add_objects:
-            if obj.status is ObjectStatus.GRASPED:
-                continue  # MTC owns this object's scene representation
-            scene.world.collision_objects.append(
-                self.to_collision_object(obj, CollisionObject.ADD))
-
-        for oid in remove_ids:
-            scene.world.collision_objects.append(self.remove_object(oid))
-
-        return scene
-
-    def detach_diff(self, obj: PlanningSceneObject, link: str) -> PlanningScene:
-        """Detach a previously-grasped object and re-add it to the world at its
-        current pose. This is the REPAIR path (GRASPED -> FREE), used when the
-        scene says the object is attached but grasp verification says the gripper
-        is empty (the phantom grasp).
-
-        This is the only place the model writes attachment state, and it only ever
-        *removes* one: detaching drops ACM entries rather than creating them, so it
-        needs no touch_links. The model can never re-create an attachment.
-        """
-        scene = PlanningScene()
-        scene.is_diff = True
-        scene.robot_state.is_diff = True
-
-        detach = AttachedCollisionObject()
-        detach.link_name = link
-        detach.object = self.remove_object(obj.id)
-        scene.robot_state.attached_collision_objects.append(detach)
-
-        scene.world.collision_objects.append(
-            self.to_collision_object(obj, CollisionObject.ADD))
-        return scene
+        if not co.primitives:
+            raise ValueError(f"'{co.id}': collision object carries no primitives")
+        if len(co.primitives) > 1:
+            raise ValueError(
+                f"'{co.id}': {len(co.primitives)} primitives — the model "
+                f"represents single-primitive objects only")
+        return PlanningSceneObject(
+            id=co.id,
+            shape=self.from_moveit_to_primitive(co.primitives[0]),
+            frame=co.header.frame_id,
+            pose=self.from_ros_pose(co.pose),
+            stamp=stamp,
+            status=status,
+            held_by=held_by,
+        )

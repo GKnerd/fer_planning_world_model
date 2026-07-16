@@ -1,13 +1,17 @@
-"""Bring up the world model server on its own.
+"""Bring up the world model server (read-only observer of the planning scene).
 
-Standalone smoke test: the node starts and serves ~/reconcile and ~/purge.
-Scene mutation goes through MoveIt's /apply_planning_scene service, so without
-move_group running those services honestly report failure (after apply_timeout).
-You can still verify the node is up and inspect its authoritative view:
+The node REQUIRES move_group: at startup it blocks fetching the full scene via
+/get_planning_scene (logging while it waits), then mirrors every diff from
+/monitored_planning_scene. It never writes the scene.
+
+Smoke test (with your MoveIt stack already running):
 
     ros2 launch fer_world_model world_model.launch.py
-    ros2 topic echo /fer_planning_scene_world_model/world_state   # latched world view
-    ros2 service call /fer_planning_scene_world_model/reconcile std_srvs/srv/Trigger {}
+    ros2 topic echo /fer_planning_scene_world_model/world_state    # latched model view
+    ros2 service call /fer_planning_scene_world_model/get_objects std_srvs/srv/Trigger {}
+
+Then add/remove a collision object (RViz planning-scene panel or a script that
+calls /apply_planning_scene) and watch the model follow.
 """
 from typing import List
 
@@ -32,10 +36,8 @@ def launch_setup(context, *args, **kwargs) -> List[Node]:
         arguments=["--ros-args", "--log-level", log_level],
         parameters=[{
             "use_sim_time": use_sim_time,
-            "planning_frame": "base",
-            "perceived_ttl": 2.0,     # s before a perceived object goes stale
-            "prune_period": 1.0,      # s between stale sweeps
-            "apply_timeout": 2.0,     # s to wait for move_group's ack
+            "stale_ttl": 2.0,       # s without a diff before an object is reported stale
+            "fetch_timeout": 5.0,   # s to wait for a /get_planning_scene answer
         }],
     )
     return [world_model_server]

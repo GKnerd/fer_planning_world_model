@@ -35,17 +35,11 @@ class Mesh:
 
 class ObjectStatus(Enum):
     """
-    Where the object sits in its manipulation lifecycle. 
+    Where the object sits in its manipulation lifecycle.
     This is the anchor for grasp-verification reconciliation.
     """
     FREE = "free"        # resting in the scene, graspable
     GRASPED = "grasped"  # attached to a gripper (held_by set)
-
-
-class ObjectSource(Enum):
-    """How the object entered the model — drives the aging policy."""
-    SEEDED = "seeded"        # declared statically (YAML/params); never ages out
-    PERCEIVED = "perceived"  # from a detector; perishable (see is_stale)
 
 
 """ 
@@ -81,9 +75,8 @@ class PlanningSceneObject:
     shape: Box | Sphere | Cylinder | Cone | Mesh
     frame: str                     # reference frame of `pose`; required — the caller must know it
     pose: Pose = field(default_factory=Pose)
-    stamp: float | None = None     # seconds; when the pose was last observed/set
+    stamp: float | None = None     # seconds; when the last scene diff about it was observed
     status: ObjectStatus = ObjectStatus.FREE
-    source: ObjectSource = ObjectSource.SEEDED
     held_by: str | None = None     # gripper link id when GRASPED, else None
 
     def __post_init__(self) -> None:
@@ -98,9 +91,16 @@ class PlanningSceneObject:
         return None if self.stamp is None else now - self.stamp
 
     def is_stale(self, now: float, ttl: float) -> bool:
-        """True if a PERCEIVED object is older than ttl. Seeded objects never
-        go stale."""
-        if self.source is ObjectSource.SEEDED:
+        """True if no scene diff has mentioned this object for longer than ttl.
+
+        Staleness is INFORMATION, never a deletion trigger: the object is still
+        in the planning scene (the scene is retained state — silence is not
+        removal), so the model keeps mirroring it and merely reports it stale.
+        Only meaningful if the detector re-asserts what it sees periodically.
+
+        GRASPED objects are exempt: they are occluded inside the gripper by
+        construction, so 'not re-observed' is expected, not suspicious."""
+        if self.status is ObjectStatus.GRASPED:
             return False
         age = self.age(now)
         return age is not None and age > ttl
