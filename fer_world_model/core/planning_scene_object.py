@@ -79,8 +79,8 @@ class PlanningSceneObject:
 
     id: str                        # == the MoveIt collision-object id. One identity.
     shape: Box | Sphere | Cylinder | Cone | Mesh
+    frame: str                     # reference frame of `pose`; required — the caller must know it
     pose: Pose = field(default_factory=Pose)
-    frame: str = "world"           # reference frame of `pose`
     stamp: float | None = None     # seconds; when the pose was last observed/set
     status: ObjectStatus = ObjectStatus.FREE
     source: ObjectSource = ObjectSource.SEEDED

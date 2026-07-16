@@ -21,6 +21,7 @@ Ownership of attachment:
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Iterable
 
 from geometry_msgs.msg import Point as RosPoint
@@ -39,6 +40,21 @@ from fer_world_model.core.planning_scene_object import (
     Cone,
     Mesh
 )
+
+
+@dataclass(frozen=True)
+class SceneFacts:
+    """Reduced, ROS-free snapshot of the only parts of the planning scene the
+    world model reconciles against: which collision objects exist in the world,
+    and which are attached to the robot (object id -> link it hangs off).
+
+    Everything else the scene carries (static environment geometry, octomap,
+    ACM, transforms) is deliberately dropped. This is the incoming mirror of the
+    outgoing diff: the node compares this against the model, but never has to
+    grub through raw messages to do it.
+    """
+    world_ids: frozenset[str]
+    attached: dict[str, str]   # object id -> link_name
 
 
 class PlanningSceneAdapter:
@@ -73,6 +89,21 @@ class PlanningSceneAdapter:
 
 
     # -- ROS -> pure-model ----------------------------------------------------
+    def scene_facts(self, scene: PlanningScene) -> SceneFacts:
+        """Reduce a PlanningScene message to the facts the model reconciles
+        against. Pure data..
+
+        Note attachment lives in robot_state.attached_collision_objects, each a
+        wrapper carrying the link it is attached to plus the CollisionObject
+        itself; the object's id is nested one level down (aco.object.id).
+        """
+        world_ids = frozenset(co.id for co in scene.world.collision_objects)
+        attached = {
+            aco.object.id: aco.link_name
+            for aco in scene.robot_state.attached_collision_objects
+        }
+        return SceneFacts(world_ids=world_ids, attached=attached)
+
     def from_moveit_to_primitive(self, primitive: SolidPrimitive) -> Box | Sphere | Cylinder | Cone:
         """SolidPrimitive -> core shape.
 

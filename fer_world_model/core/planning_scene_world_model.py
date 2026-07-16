@@ -50,7 +50,6 @@ class PlanningSceneWorldModel:
         *,
         pose: Optional[Pose] = None,
         frame: Optional[str] = None,
-        dimensions: Optional[List[float]] = None,
         status: Optional[ObjectStatus] = None,
         held_by=_UNSET,
         stamp: Optional[float] = None,
@@ -81,8 +80,6 @@ class PlanningSceneWorldModel:
             obj.pose = pose
         if frame is not None:
             obj.frame = frame
-        if dimensions is not None:
-            obj.dimensions = dimensions
         obj.status = new_status
         obj.held_by = new_held_by
         if stamp is not None:

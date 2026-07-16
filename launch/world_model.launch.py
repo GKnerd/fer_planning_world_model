@@ -1,14 +1,13 @@
 """Bring up the world model server on its own.
 
-Standalone smoke test: the node starts, optionally seeds a demo object, and
-publishes planning-scene diffs on /planning_scene. Those diffs are only *applied*
-when move_group's PlanningSceneMonitor is running to consume them — run this
-alongside the MoveIt stack to actually see objects in the scene. On its own you
-can still verify the node is up and inspect its authoritative view:
+Standalone smoke test: the node starts and serves ~/reconcile and ~/purge.
+Scene mutation goes through MoveIt's /apply_planning_scene service, so without
+move_group running those services honestly report failure (after apply_timeout).
+You can still verify the node is up and inspect its authoritative view:
 
     ros2 launch fer_world_model world_model.launch.py
-    ros2 topic echo /world_model_server/world          # latched world view
-    ros2 service call /world_model_server/reconcile std_srvs/srv/Trigger {}
+    ros2 topic echo /fer_planning_scene_world_model/world_state   # latched world view
+    ros2 service call /fer_planning_scene_world_model/reconcile std_srvs/srv/Trigger {}
 """
 from typing import List
 
@@ -23,7 +22,6 @@ def launch_setup(context, *args, **kwargs) -> List[Node]:
     # LaunchConfiguration straight into a param dict yields a *string*, and
     # bool("false") is True — a classic footgun for boolean params.
     use_sim_time = LaunchConfiguration("use_sim_time").perform(context).lower() == "true"
-    seed_demo = LaunchConfiguration("seed_demo").perform(context).lower() == "true"
     log_level = LaunchConfiguration("log_level").perform(context)
 
     world_model_server = Node(
@@ -37,7 +35,7 @@ def launch_setup(context, *args, **kwargs) -> List[Node]:
             "planning_frame": "base",
             "perceived_ttl": 2.0,     # s before a perceived object goes stale
             "prune_period": 1.0,      # s between stale sweeps
-            "seed_demo": seed_demo,
+            "apply_timeout": 2.0,     # s to wait for move_group's ack
         }],
     )
     return [world_model_server]
@@ -53,10 +51,6 @@ def generate_declared_arguments() -> List[DeclareLaunchArgument]:
         DeclareLaunchArgument(
             "use_sim_time", default_value="true",
             description="If true, use the simulated clock."),
-        DeclareLaunchArgument(
-            "seed_demo", default_value="true",
-            description="Spawn a demo cylinder_1 on startup so there is something "
-                        "to see when running standalone."),
         DeclareLaunchArgument(
             "log_level", default_value="info",
             description="Node log level (debug|info|warn|error|fatal)."),
