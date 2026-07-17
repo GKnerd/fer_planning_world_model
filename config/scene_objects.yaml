@@ -1,17 +1,21 @@
-# Static collision objects pushed to MoveIt's planning scene at startup.
+# Manipulable objects the mock camera publishes to /planning_scene (op = ADD).
 #
-# Each entry maps onto a moveit_msgs/msg/CollisionObject with operation = ADD.
-# Primitive types:
+# Each entry maps onto a moveit_msgs/msg/CollisionObject. Primitive types:
 #   box      → dimensions: [x, y, z]
 #   cylinder → dimensions: [height, radius]
 #   sphere   → dimensions: [radius]
 #   cone     → dimensions: [height, radius]
 #
-# Pose is in the object's `frame_id` (must be a frame ROS knows via /tf).
+# Pose is in `frame_id` (must be a frame ROS knows via /tf). Poses here are
+# the objects' INITIAL positions; keep them clear of the drop zone the
+# MockPickPlace tree places into (the y = +0.30 row).
+#
+# Gripper constraint: the Franka hand opens ~0.08 m, so any dimension the
+# fingers must span has to stay below that (sphere diameter, box side, ...).
 
 objects:
   - id: cylinder_1
-    frame_id: world
+    frame_id: base
     primitive:
       type: cylinder
       dimensions: [0.10, 0.02]   # height, radius
@@ -27,7 +31,7 @@ objects:
         w: 1.0
 
   - id: box_1
-    frame_id: world
+    frame_id: base
     primitive:
       type: box
       dimensions: [0.05, 0.05, 0.05]   # x, y, z
@@ -36,6 +40,38 @@ objects:
         x: 0.4
         y: 0.10
         z: 0.025
+      orientation:
+        x: 0.0
+        y: 0.0
+        z: 0.0
+        w: 1.0
+
+  - id: box_2
+    frame_id: base
+    primitive:
+      type: box
+      dimensions: [0.05, 0.05, 0.05]   # x, y, z
+    pose:
+      position:
+        x: 0.4
+        y: -0.10
+        z: 0.025
+      orientation:
+        x: 0.0
+        y: 0.0
+        z: 0.0
+        w: 1.0
+
+  - id: sphere_1
+    frame_id: base
+    primitive:
+      type: sphere
+      dimensions: [0.03]   # radius
+    pose:
+      position:
+        x: 0.55
+        y: 0.10
+        z: 0.03
       orientation:
         x: 0.0
         y: 0.0

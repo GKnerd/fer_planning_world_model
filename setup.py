@@ -14,6 +14,7 @@ setup(
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'launch'), glob('launch/*.launch.py')),
+        (os.path.join('share', package_name, 'config'), glob('config/*.yaml')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -29,6 +30,7 @@ setup(
     entry_points={
         'console_scripts': [
             'world_model_server = fer_world_model.planning_scene_world_model_server:main',
+            'mock_camera = fer_world_model.mock_camera_node:main',
         ],
     },
 )
